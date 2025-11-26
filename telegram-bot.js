@@ -4,11 +4,17 @@ const { Pool } = require('pg');
 require('dotenv').config();
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
-const backendUrl = process.env.BACKEND_URL || 'http://localhost:3000';
+const backendPort = process.env.PORT || 8080;
+const backendUrl = process.env.BACKEND_URL || `http://localhost:${backendPort}`;
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
 });
+
+console.log(`✅ Telegram bot initialized with backend: ${backendUrl}`);
+
+// Track users waiting for phone number
+const waitingForPhone = new Set();
 
 // Start command
 bot.start(async (ctx) => {
@@ -17,16 +23,40 @@ bot.start(async (ctx) => {
       `✨ *Welcome to iDev WhatsApp Hub!* ✨\n\n` +
       `This bot helps you connect your WhatsApp account and manage your groups.\n\n` +
       `🔄 *How it works:*\n` +
-      `1. Send your phone number\n` +
-      `2. Get pairing code from us\n` +
-      `3. Connect WhatsApp\n` +
-      `4. Manage groups with powerful commands!\n\n` +
-      `📱 To get started, send your phone number with country code:\n` +
-      `Example: 1234567890`,
+      `1. Use /pair command\n` +
+      `2. Send your phone number\n` +
+      `3. Get pairing code from us\n` +
+      `4. Scan QR code in WhatsApp\n` +
+      `5. Start managing your groups!\n\n` +
+      `📱 To get started, use: /pair`,
       { parse_mode: 'Markdown' }
     );
   } catch (err) {
     console.error('Error in /start:', err);
+    await ctx.reply('❌ Error occurred. Please try again.');
+  }
+});
+
+// Pair command
+bot.command('pair', async (ctx) => {
+  try {
+    const telegramId = ctx.from.id;
+    
+    // Check if already connected
+    const user = await pool.query('SELECT * FROM users WHERE telegram_id = $1', [telegramId]);
+    if (user.rows.length > 0 && user.rows[0].is_connected) {
+      return await ctx.reply('✅ You\'re already connected! Use /help for commands.');
+    }
+
+    waitingForPhone.add(telegramId);
+    await ctx.reply(
+      `📱 *Ready to pair!*\n\n` +
+      `Please send your phone number with country code:\n\n` +
+      `Example: 1234567890`,
+      { parse_mode: 'Markdown' }
+    );
+  } catch (err) {
+    console.error('Error in /pair:', err);
     await ctx.reply('❌ Error occurred. Please try again.');
   }
 });
@@ -37,9 +67,10 @@ bot.command('help', async (ctx) => {
     await ctx.reply(
       `📚 *Help & Commands*\n\n` +
       `/start - Start the bot\n` +
+      `/pair - Pair your WhatsApp account\n` +
       `/status - Check connection status\n` +
       `/help - Show this message\n\n` +
-      `📱 To connect WhatsApp, just send your phone number!`,
+      `📱 To connect WhatsApp, use /pair first!`,
       { parse_mode: 'Markdown' }
     );
   } catch (err) {
@@ -79,16 +110,18 @@ bot.on('text', async (ctx) => {
     const text = ctx.message.text;
     const telegramId = ctx.from.id;
 
+    // Only process if user sent /pair command first
+    if (!waitingForPhone.has(telegramId)) {
+      return await ctx.reply('❌ Please use /pair command first to start pairing.');
+    }
+
     // Check if it's a phone number (digits only)
     if (!/^\d{10,15}$/.test(text)) {
       return await ctx.reply('❌ Please send a valid phone number with country code (digits only)\n\nExample: 1234567890');
     }
 
-    // Check if user already connected
-    const user = await pool.query('SELECT * FROM users WHERE telegram_id = $1', [telegramId]);
-    if (user.rows.length > 0 && user.rows[0].is_connected) {
-      return await ctx.reply('✅ You\'re already connected! Use /help for commands.');
-    }
+    // Remove from waiting set
+    waitingForPhone.delete(telegramId);
 
     await ctx.reply('⏳ Initiating WhatsApp connection...');
 
