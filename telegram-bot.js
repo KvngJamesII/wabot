@@ -1,15 +1,10 @@
 const { Telegraf } = require('telegraf');
 const axios = require('axios');
-const { Pool } = require('pg');
 require('dotenv').config();
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 const backendPort = process.env.PORT || 8080;
 const backendUrl = process.env.BACKEND_URL || `http://localhost:${backendPort}`;
-
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-});
 
 console.log(`✅ Telegram bot initialized with backend: ${backendUrl}`);
 
@@ -42,10 +37,14 @@ bot.command('pair', async (ctx) => {
   try {
     const telegramId = ctx.from.id;
     
-    // Check if already connected
-    const user = await pool.query('SELECT * FROM users WHERE telegram_id = $1', [telegramId]);
-    if (user.rows.length > 0 && user.rows[0].is_connected) {
-      return await ctx.reply('✅ You\'re already connected! Use /help for commands.');
+    // Check status via backend
+    try {
+      const statusResponse = await axios.get(`${backendUrl}/api/user-status/${telegramId}`);
+      if (statusResponse.data.isConnected) {
+        return await ctx.reply('✅ You\'re already connected! Use /help for commands.');
+      }
+    } catch (err) {
+      // User doesn't exist yet, that's fine - continue with pairing
     }
 
     waitingForPhone.add(telegramId);
@@ -82,22 +81,22 @@ bot.command('help', async (ctx) => {
 bot.command('status', async (ctx) => {
   try {
     const telegramId = ctx.from.id;
-    const user = await pool.query('SELECT * FROM users WHERE telegram_id = $1', [telegramId]);
+    
+    try {
+      const statusResponse = await axios.get(`${backendUrl}/api/user-status/${telegramId}`);
+      const userInfo = statusResponse.data;
+      const status = userInfo.isConnected ? '✅ Connected' : '⏳ Connecting...';
 
-    if (user.rows.length === 0) {
-      return await ctx.reply('❌ You haven\'t connected yet. Send your phone number to start!');
+      await ctx.reply(
+        `📊 *Your Connection Status*\n\n` +
+        `Phone: ${userInfo.phoneNumber}\n` +
+        `Status: ${status}\n` +
+        `Connected Since: ${userInfo.createdAt}`,
+        { parse_mode: 'Markdown' }
+      );
+    } catch (err) {
+      await ctx.reply('❌ You haven\'t connected yet. Use /pair to start!');
     }
-
-    const userInfo = user.rows[0];
-    const status = userInfo.is_connected ? '✅ Connected' : '⏳ Connecting...';
-
-    await ctx.reply(
-      `📊 *Your Connection Status*\n\n` +
-      `Phone: ${userInfo.phone_number}\n` +
-      `Status: ${status}\n` +
-      `Connected Since: ${userInfo.created_at}`,
-      { parse_mode: 'Markdown' }
-    );
   } catch (err) {
     console.error('Error in /status:', err);
     await ctx.reply('❌ Error checking status');
