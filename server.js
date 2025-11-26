@@ -25,77 +25,93 @@ const whatsappSessions = {};
 app.use(cors());
 app.use(express.json());
 
-// Generate 6-digit pairing code
-function generatePairingCode() {
-  return Math.floor(100000 + Math.random() * 900000).toString();
-}
-
 // Initialize WhatsApp session for a user with pairing code
 async function initializeWhatsAppSession(userId, telegramId, phoneNumber) {
-  try {
-    const sessionId = uuidv4();
-    const sessionDir = `./sessions/${sessionId}`;
-    
-    console.log(`Initializing WhatsApp session for user ${userId}`);
+  return new Promise(async (resolve, reject) => {
+    try {
+      const sessionId = uuidv4();
+      const sessionDir = `./sessions/${sessionId}`;
+      
+      console.log(`Initializing WhatsApp session for user ${userId}`);
 
-    // Create WhatsApp socket
-    const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
-    
-    const sock = makeWASocket({
-      auth: state,
-      logger,
-      printQRInTerminal: false,
-    });
+      // Create WhatsApp socket
+      const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
+      
+      const sock = makeWASocket({
+        auth: state,
+        logger,
+        printQRInTerminal: false,
+      });
 
-    let pairingCode = null;
+      let pairingCode = null;
+      let resolved = false;
 
-    sock.ev.on('connection.update', async (update) => {
-      const { connection, lastDisconnect } = update;
+      sock.ev.on('connection.update', async (update) => {
+        const { connection, lastDisconnect, pairingCode: code } = update;
 
-      if (connection === 'open') {
-        console.log(`WhatsApp connected for user ${userId}`);
-        
-        // Update database
-        await pool.query(
-          'UPDATE users SET is_connected = true, whatsapp_session_id = $1, status = $2 WHERE id = $3',
-          [sessionId, 'connected', userId]
-        );
-
-        // Store session
-        whatsappSessions[userId] = {
-          socket: sock,
-          sessionId,
-          pairingCode,
-          connected: true,
-        };
-      }
-
-      if (connection === 'close') {
-        if (lastDisconnect?.error?.output?.statusCode === DisconnectReason.loggedOut) {
-          console.log(`User ${userId} logged out`);
-          delete whatsappSessions[userId];
-        } else {
-          setTimeout(() => initializeWhatsAppSession(userId, telegramId, phoneNumber), 3000);
+        // Capture pairing code when available
+        if (code && !pairingCode) {
+          pairingCode = code;
+          console.log(`Pairing code generated for user ${userId}: ${pairingCode}`);
+          
+          // Resolve with the pairing code on first generation
+          if (!resolved) {
+            resolved = true;
+            resolve({ sessionId, pairingCode });
+          }
         }
-      }
-    });
 
-    sock.ev.on('creds.update', saveCreds);
+        if (connection === 'open') {
+          console.log(`WhatsApp connected for user ${userId}`);
+          
+          // Update database
+          await pool.query(
+            'UPDATE users SET is_connected = true, whatsapp_session_id = $1, status = $2 WHERE id = $3',
+            [sessionId, 'connected', userId]
+          );
 
-    // Store initial session data
-    whatsappSessions[userId] = {
-      socket: sock,
-      sessionId,
-      pairingCode: null,
-      connected: false,
-    };
+          // Store session
+          whatsappSessions[userId] = {
+            socket: sock,
+            sessionId,
+            pairingCode,
+            connected: true,
+          };
+        }
 
-    // Return pairing code immediately
-    return { sessionId, pairingCode: generatePairingCode() };
-  } catch (err) {
-    console.error(`Error initializing session for user ${userId}:`, err);
-    throw err;
-  }
+        if (connection === 'close') {
+          if (lastDisconnect?.error?.output?.statusCode === DisconnectReason.loggedOut) {
+            console.log(`User ${userId} logged out`);
+            delete whatsappSessions[userId];
+          } else {
+            setTimeout(() => initializeWhatsAppSession(userId, telegramId, phoneNumber), 3000);
+          }
+        }
+      });
+
+      sock.ev.on('creds.update', saveCreds);
+
+      // Store initial session data
+      whatsappSessions[userId] = {
+        socket: sock,
+        sessionId,
+        pairingCode: null,
+        connected: false,
+      };
+
+      // Timeout after 30 seconds if no pairing code received
+      setTimeout(() => {
+        if (!resolved) {
+          resolved = true;
+          reject(new Error('Pairing code not generated within 30 seconds'));
+        }
+      }, 30000);
+
+    } catch (err) {
+      console.error(`Error initializing session for user ${userId}:`, err);
+      reject(err);
+    }
+  });
 }
 
 // API endpoint to start WhatsApp connection
