@@ -40,27 +40,38 @@ async function initializeWhatsAppSession(userId, telegramId, phoneNumber) {
       auth: state,
       logger,
       printQRInTerminal: false,
-      browser: ['WhatsApp', 'Linux', '1.0.0'],
-      pairingCode: true,
-      qrTimeout: 0, // Disable QR code timeout to force pairing code
-      shouldSyncHistoryMessage: () => false,
-      shouldIgnoreJid: () => false,
     });
 
     let pairingCode = null;
+    let codeSent = false;
 
     sock.ev.on('connection.update', async (update) => {
-      const { connection, lastDisconnect, pairingCode: code, qr, isOnline, isNewLogin } = update;
+      const { connection, lastDisconnect, pairingCode: code, qr } = update;
       
-      console.log(`[Connection Update] User ${userId}: connection=${connection}, code=${code ? 'YES' : 'NO'}, qr=${qr ? 'YES' : 'NO'}, online=${isOnline}`);
+      console.log(`[Connection Update] User ${userId}: connection=${connection}, code=${code ? 'YES' : 'NO'}, qr=${qr ? 'YES' : 'NO'}`);
+
+      // If we get a QR code, try to generate pairing code from it
+      if (qr && !pairingCode && typeof sock.requestPairingCode === 'function') {
+        console.log(`Got QR code, attempting to request pairing code for ${phoneNumber}...`);
+        try {
+          const code = await sock.requestPairingCode(phoneNumber);
+          pairingCode = code;
+          console.log(`✅ Pairing code generated for user ${userId}: ${pairingCode}`);
+          if (whatsappSessions[userId]) {
+            whatsappSessions[userId].pairingCode = code;
+          }
+        } catch (err) {
+          console.log(`Could not generate pairing code: ${err.message}`);
+        }
+      }
 
       // Capture pairing code when available
       if (code) {
         pairingCode = code;
         console.log(`✅ Pairing code generated for user ${userId}: ${pairingCode}`);
-        
-        // Update session with pairing code
-        whatsappSessions[userId].pairingCode = code;
+        if (whatsappSessions[userId]) {
+          whatsappSessions[userId].pairingCode = code;
+        }
       }
 
       if (connection === 'open') {
@@ -73,7 +84,9 @@ async function initializeWhatsAppSession(userId, telegramId, phoneNumber) {
         );
 
         // Update session
-        whatsappSessions[userId].connected = true;
+        if (whatsappSessions[userId]) {
+          whatsappSessions[userId].connected = true;
+        }
       }
 
       if (connection === 'close') {
@@ -83,18 +96,6 @@ async function initializeWhatsAppSession(userId, telegramId, phoneNumber) {
         if (reason === DisconnectReason.loggedOut) {
           console.log(`User ${userId} logged out`);
           delete whatsappSessions[userId];
-        } else if (reason === DisconnectReason.connectionClosed || reason === DisconnectReason.connectionLost) {
-          console.log(`Connection lost for user ${userId}, will reconnect in 3s`);
-          setTimeout(() => {
-            if (whatsappSessions[userId]) {
-              sock.ws?.close();
-              initializeWhatsAppSession(userId, telegramId, phoneNumber).catch(err => 
-                console.error(`Failed to reconnect user ${userId}:`, err)
-              );
-            }
-          }, 3000);
-        } else {
-          console.log(`Connection closed for user ${userId} (reason: ${reason})`);
         }
       }
     });
