@@ -122,26 +122,51 @@ bot.on('text', async (ctx) => {
     // Remove from waiting set
     waitingForPhone.delete(telegramId);
 
-    // Call backend to generate pairing code
+    // Call backend to initiate connection
     const response = await axios.post(`${backendUrl}/api/initiate-connection`, {
       telegramId,
       phoneNumber: text,
     });
 
     if (response.data.success) {
-      const pairingCode = response.data.pairingCode;
+      const userId = response.data.userId;
       
       await ctx.reply(
-        `✅ *Your Pairing Code is Ready!*\n\n` +
-        `📱 Use this code to connect:\n\n` +
-        `\`\`\`\n${pairingCode}\n\`\`\`\n\n` +
-        `🔗 *How to pair:*\n` +
-        `1. Open WhatsApp on your phone\n` +
-        `2. Go to Settings → Linked devices\n` +
-        `3. Select "Link a device"\n` +
-        `4. Enter this code when prompted`,
+        `⏳ *Generating Pairing Code...*\n\n` +
+        `Please wait while we connect to WhatsApp and generate your pairing code.`,
         { parse_mode: 'Markdown' }
       );
+
+      // Poll for pairing code
+      let attempts = 0;
+      const pollInterval = setInterval(async () => {
+        attempts++;
+        
+        try {
+          const codeResponse = await axios.get(`${backendUrl}/api/pairing-code/${userId}`);
+          
+          if (codeResponse.data.pairingCode) {
+            clearInterval(pollInterval);
+            await ctx.reply(
+              `✅ *Your Pairing Code is Ready!*\n\n` +
+              `📱 Use this code to connect:\n\n` +
+              `\`\`\`\n${codeResponse.data.pairingCode}\n\`\`\`\n\n` +
+              `🔗 *How to pair:*\n` +
+              `1. Open WhatsApp on your phone\n` +
+              `2. Go to Settings → Linked devices\n` +
+              `3. Select "Link a device"\n` +
+              `4. Enter this code when prompted`,
+              { parse_mode: 'Markdown' }
+            );
+          } else if (attempts > 120) {
+            // Timeout after 2 minutes
+            clearInterval(pollInterval);
+            await ctx.reply('❌ Pairing code generation timeout. Please try again with /pair command.');
+          }
+        } catch (err) {
+          console.error('Error polling for pairing code:', err);
+        }
+      }, 1000); // Poll every second
     }
   } catch (err) {
     console.error('Error in text handler:', err);
