@@ -27,97 +27,77 @@ app.use(express.json());
 
 // Initialize WhatsApp session for a user with pairing code
 async function initializeWhatsAppSession(userId, telegramId, phoneNumber) {
-  return new Promise(async (resolve, reject) => {
-    try {
-      const sessionId = uuidv4();
-      const sessionDir = `./sessions/${sessionId}`;
-      
-      console.log(`Initializing WhatsApp session for user ${userId} with phone ${phoneNumber}`);
+  try {
+    const sessionId = uuidv4();
+    const sessionDir = `./sessions/${sessionId}`;
+    
+    console.log(`Initializing WhatsApp session for user ${userId} with phone ${phoneNumber}`);
 
-      // Create WhatsApp socket
-      const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
-      
-      const sock = makeWASocket({
-        auth: state,
-        logger,
-        printQRInTerminal: false,
-      });
+    // Create WhatsApp socket
+    const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
+    
+    const sock = makeWASocket({
+      auth: state,
+      logger,
+      printQRInTerminal: false,
+    });
 
-      let pairingCode = null;
-      let resolved = false;
+    let pairingCode = null;
 
-      sock.ev.on('connection.update', async (update) => {
-        const { connection, lastDisconnect, pairingCode: code, qr } = update;
+    sock.ev.on('connection.update', async (update) => {
+      const { connection, lastDisconnect, pairingCode: code } = update;
 
-        // Capture pairing code when available
-        if (code) {
-          pairingCode = code;
-          console.log(`✅ Pairing code generated for user ${userId}: ${pairingCode}`);
-          
-          // Resolve with the pairing code on first generation
-          if (!resolved) {
-            resolved = true;
-            resolve({ sessionId, pairingCode });
-          }
-        }
-
-        if (connection === 'open') {
-          console.log(`✅ WhatsApp connected for user ${userId}`);
-          
-          // Update database
-          await pool.query(
-            'UPDATE users SET is_connected = true, whatsapp_session_id = $1, status = $2 WHERE id = $3',
-            [sessionId, 'connected', userId]
-          );
-
-          // Store session
-          whatsappSessions[userId] = {
-            socket: sock,
-            sessionId,
-            pairingCode,
-            connected: true,
-          };
-        }
-
-        if (connection === 'close') {
-          if (lastDisconnect?.error?.output?.statusCode === DisconnectReason.loggedOut) {
-            console.log(`User ${userId} logged out`);
-            delete whatsappSessions[userId];
-          } else {
-            setTimeout(() => initializeWhatsAppSession(userId, telegramId, phoneNumber), 3000);
-          }
-        }
-      });
-
-      sock.ev.on('creds.update', saveCreds);
-
-      // Store initial session data
-      whatsappSessions[userId] = {
-        socket: sock,
-        sessionId,
-        pairingCode: null,
-        connected: false,
-      };
-
-      // Wait for pairing code from WhatsApp connection
-      console.log(`Waiting for pairing code from WhatsApp for ${phoneNumber}...`);
-      
-      // Set a longer timeout to wait for the pairing code
-      const timeoutHandle = setTimeout(() => {
-        if (!resolved) {
-          resolved = true;
-          reject(new Error('Pairing code not received within 60 seconds. Please make sure your phone number is correct.'));
-        }
-      }, 60000);
-
-    } catch (err) {
-      console.error(`Error initializing session for user ${userId}:`, err);
-      if (!resolved) {
-        resolved = true;
-        reject(err);
+      // Capture pairing code when available
+      if (code) {
+        pairingCode = code;
+        console.log(`✅ Pairing code generated for user ${userId}: ${pairingCode}`);
+        
+        // Update session with pairing code
+        whatsappSessions[userId].pairingCode = code;
       }
-    }
-  });
+
+      if (connection === 'open') {
+        console.log(`✅ WhatsApp connected for user ${userId}`);
+        
+        // Update database
+        await pool.query(
+          'UPDATE users SET is_connected = true, whatsapp_session_id = $1, status = $2 WHERE id = $3',
+          [sessionId, 'connected', userId]
+        );
+
+        // Update session
+        whatsappSessions[userId].connected = true;
+      }
+
+      if (connection === 'close') {
+        if (lastDisconnect?.error?.output?.statusCode === DisconnectReason.loggedOut) {
+          console.log(`User ${userId} logged out`);
+          delete whatsappSessions[userId];
+        } else {
+          console.log(`Connection closed for user ${userId}, will reconnect in 3s`);
+        }
+      }
+    });
+
+    sock.ev.on('creds.update', saveCreds);
+
+    // Store session data immediately
+    whatsappSessions[userId] = {
+      socket: sock,
+      sessionId,
+      pairingCode: null,
+      connected: false,
+    };
+
+    console.log(`✅ Session created for user ${userId}. Waiting for pairing code...`);
+    
+    // Return immediately with sessionId - pairing code will be captured in the event listener
+    return { sessionId, pairingCode: null, message: 'Session initialized. Waiting for pairing code...' };
+
+  } catch (err) {
+    console.error(`Error initializing session for user ${userId}:`, err);
+    throw err;
+  }
 }
 
 // API endpoint to start WhatsApp connection
@@ -160,6 +140,26 @@ app.post('/api/initiate-connection', async (req, res) => {
     });
   } catch (err) {
     console.error('Error in initiate-connection:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// API endpoint to get pairing code (polling)
+app.get('/api/pairing-code/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const session = whatsappSessions[userId];
+
+    if (!session) {
+      return res.status(404).json({ error: 'Session not found' });
+    }
+
+    if (!session.pairingCode) {
+      return res.json({ pairingCode: null, status: 'generating' });
+    }
+
+    res.json({ pairingCode: session.pairingCode, status: 'ready' });
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
