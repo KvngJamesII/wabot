@@ -25,8 +25,13 @@ const whatsappSessions = {};
 app.use(cors());
 app.use(express.json());
 
-// Initialize WhatsApp session for a user
-async function initializeWhatsAppSession(userId, telegramId) {
+// Generate 6-digit pairing code
+function generatePairingCode() {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+}
+
+// Initialize WhatsApp session for a user with pairing code
+async function initializeWhatsAppSession(userId, telegramId, phoneNumber) {
   try {
     const sessionId = uuidv4();
     const sessionDir = `./sessions/${sessionId}`;
@@ -42,31 +47,25 @@ async function initializeWhatsAppSession(userId, telegramId) {
       printQRInTerminal: false,
     });
 
-    let qrCode = null;
+    let pairingCode = null;
 
     sock.ev.on('connection.update', async (update) => {
-      const { connection, lastDisconnect, qr } = update;
-
-      if (qr) {
-        qrCode = qr;
-        // QR code generated, can be sent to Telegram
-        console.log(`QR Code generated for user ${userId}`);
-      }
+      const { connection, lastDisconnect } = update;
 
       if (connection === 'open') {
         console.log(`WhatsApp connected for user ${userId}`);
         
         // Update database
         await pool.query(
-          'UPDATE users SET is_connected = true, whatsapp_session_id = $1 WHERE id = $2',
-          [sessionId, userId]
+          'UPDATE users SET is_connected = true, whatsapp_session_id = $1, status = $2 WHERE id = $3',
+          [sessionId, 'connected', userId]
         );
 
         // Store session
         whatsappSessions[userId] = {
           socket: sock,
           sessionId,
-          qrCode,
+          pairingCode,
           connected: true,
         };
       }
@@ -76,7 +75,7 @@ async function initializeWhatsAppSession(userId, telegramId) {
           console.log(`User ${userId} logged out`);
           delete whatsappSessions[userId];
         } else {
-          setTimeout(() => initializeWhatsAppSession(userId, telegramId), 3000);
+          setTimeout(() => initializeWhatsAppSession(userId, telegramId, phoneNumber), 3000);
         }
       }
     });
@@ -87,12 +86,12 @@ async function initializeWhatsAppSession(userId, telegramId) {
     whatsappSessions[userId] = {
       socket: sock,
       sessionId,
-      qrCode: null,
+      pairingCode: null,
       connected: false,
     };
 
-    // Return session info (will be updated when QR is ready)
-    return { sessionId, message: 'Session initializing, waiting for QR code...' };
+    // Return pairing code immediately
+    return { sessionId, pairingCode: generatePairingCode() };
   } catch (err) {
     console.error(`Error initializing session for user ${userId}:`, err);
     throw err;
@@ -115,27 +114,27 @@ app.post('/api/initiate-connection', async (req, res) => {
       // Create new user
       user = await pool.query(
         'INSERT INTO users (telegram_id, phone_number, status) VALUES ($1, $2, $3) RETURNING *',
-        [telegramId, phoneNumber, 'connecting']
+        [telegramId, phoneNumber, 'pairing']
       );
     } else {
       // Update existing user
       await pool.query(
         'UPDATE users SET phone_number = $1, status = $2 WHERE telegram_id = $3',
-        [phoneNumber, 'connecting', telegramId]
+        [phoneNumber, 'pairing', telegramId]
       );
       user = await pool.query('SELECT * FROM users WHERE telegram_id = $1', [telegramId]);
     }
 
     const userId = user.rows[0].id;
 
-    // Initialize WhatsApp session
-    const sessionInfo = await initializeWhatsAppSession(userId, telegramId);
+    // Initialize WhatsApp session and get pairing code
+    const sessionInfo = await initializeWhatsAppSession(userId, telegramId, phoneNumber);
 
     res.json({
       success: true,
       userId,
       sessionId: sessionInfo.sessionId,
-      message: sessionInfo.message,
+      pairingCode: sessionInfo.pairingCode,
     });
   } catch (err) {
     console.error('Error in initiate-connection:', err);
