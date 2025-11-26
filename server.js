@@ -45,7 +45,9 @@ async function initializeWhatsAppSession(userId, telegramId, phoneNumber) {
     let pairingCode = null;
 
     sock.ev.on('connection.update', async (update) => {
-      const { connection, lastDisconnect, pairingCode: code } = update;
+      const { connection, lastDisconnect, pairingCode: code, qr, isOnline, isNewLogin } = update;
+      
+      console.log(`[Connection Update] User ${userId}: connection=${connection}, code=${code ? 'YES' : 'NO'}, qr=${qr ? 'YES' : 'NO'}, online=${isOnline}`);
 
       // Capture pairing code when available
       if (code) {
@@ -70,11 +72,24 @@ async function initializeWhatsAppSession(userId, telegramId, phoneNumber) {
       }
 
       if (connection === 'close') {
-        if (lastDisconnect?.error?.output?.statusCode === DisconnectReason.loggedOut) {
+        const reason = lastDisconnect?.error?.output?.statusCode;
+        console.log(`[Disconnect] User ${userId}: statusCode=${reason}, error=${lastDisconnect?.error?.message}`);
+        
+        if (reason === DisconnectReason.loggedOut) {
           console.log(`User ${userId} logged out`);
           delete whatsappSessions[userId];
+        } else if (reason === DisconnectReason.connectionClosed || reason === DisconnectReason.connectionLost) {
+          console.log(`Connection lost for user ${userId}, will reconnect in 3s`);
+          setTimeout(() => {
+            if (whatsappSessions[userId]) {
+              sock.ws?.close();
+              initializeWhatsAppSession(userId, telegramId, phoneNumber).catch(err => 
+                console.error(`Failed to reconnect user ${userId}:`, err)
+              );
+            }
+          }, 3000);
         } else {
-          console.log(`Connection closed for user ${userId}, will reconnect in 3s`);
+          console.log(`Connection closed for user ${userId} (reason: ${reason})`);
         }
       }
     });
