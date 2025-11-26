@@ -32,7 +32,7 @@ async function initializeWhatsAppSession(userId, telegramId, phoneNumber) {
       const sessionId = uuidv4();
       const sessionDir = `./sessions/${sessionId}`;
       
-      console.log(`Initializing WhatsApp session for user ${userId}`);
+      console.log(`Initializing WhatsApp session for user ${userId} with phone ${phoneNumber}`);
 
       // Create WhatsApp socket
       const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
@@ -47,12 +47,12 @@ async function initializeWhatsAppSession(userId, telegramId, phoneNumber) {
       let resolved = false;
 
       sock.ev.on('connection.update', async (update) => {
-        const { connection, lastDisconnect, pairingCode: code } = update;
+        const { connection, lastDisconnect, pairingCode: code, qr } = update;
 
         // Capture pairing code when available
-        if (code && !pairingCode) {
+        if (code) {
           pairingCode = code;
-          console.log(`Pairing code generated for user ${userId}: ${pairingCode}`);
+          console.log(`✅ Pairing code generated for user ${userId}: ${pairingCode}`);
           
           // Resolve with the pairing code on first generation
           if (!resolved) {
@@ -62,7 +62,7 @@ async function initializeWhatsAppSession(userId, telegramId, phoneNumber) {
         }
 
         if (connection === 'open') {
-          console.log(`WhatsApp connected for user ${userId}`);
+          console.log(`✅ WhatsApp connected for user ${userId}`);
           
           // Update database
           await pool.query(
@@ -99,17 +99,23 @@ async function initializeWhatsAppSession(userId, telegramId, phoneNumber) {
         connected: false,
       };
 
-      // Timeout after 30 seconds if no pairing code received
-      setTimeout(() => {
+      // Wait for pairing code from WhatsApp connection
+      console.log(`Waiting for pairing code from WhatsApp for ${phoneNumber}...`);
+      
+      // Set a longer timeout to wait for the pairing code
+      const timeoutHandle = setTimeout(() => {
         if (!resolved) {
           resolved = true;
-          reject(new Error('Pairing code not generated within 30 seconds'));
+          reject(new Error('Pairing code not received within 60 seconds. Please make sure your phone number is correct.'));
         }
-      }, 30000);
+      }, 60000);
 
     } catch (err) {
       console.error(`Error initializing session for user ${userId}:`, err);
-      reject(err);
+      if (!resolved) {
+        resolved = true;
+        reject(err);
+      }
     }
   });
 }
