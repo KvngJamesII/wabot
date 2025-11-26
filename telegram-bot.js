@@ -122,44 +122,26 @@ bot.on('text', async (ctx) => {
     // Remove from waiting set
     waitingForPhone.delete(telegramId);
 
-    await ctx.reply('⏳ Initiating WhatsApp connection...');
-
-    // Call backend to initiate connection
+    // Call backend to generate pairing code
     const response = await axios.post(`${backendUrl}/api/initiate-connection`, {
       telegramId,
       phoneNumber: text,
     });
 
     if (response.data.success) {
-      const userId = response.data.userId;
+      const pairingCode = response.data.pairingCode;
       
       await ctx.reply(
-        `✅ *Connection Started!*\n\n` +
-        `Generating QR code...\n` +
-        `Please wait a moment for the QR code to appear.`,
+        `✅ *Your Pairing Code is Ready!*\n\n` +
+        `📱 Use this code to connect:\n\n` +
+        `\`\`\`\n${pairingCode}\n\`\`\`\n\n` +
+        `🔗 *How to pair:*\n` +
+        `1. Open WhatsApp on your phone\n` +
+        `2. Go to Settings → Linked devices\n` +
+        `3. Select "Link a device"\n` +
+        `4. Enter this code when prompted`,
         { parse_mode: 'Markdown' }
       );
-
-      // Wait a bit then send QR code
-      setTimeout(async () => {
-        try {
-          const qrResponse = await axios.get(`${backendUrl}/api/qr-code/${userId}`);
-          
-          if (qrResponse.data.qrCode) {
-            await ctx.reply(
-              `📱 *Your QR Code:*\n\n` +
-              `Open WhatsApp on your phone and scan this code.`,
-              { parse_mode: 'Markdown' }
-            );
-            // Send QR as text (actual QR image would need special handling)
-            await ctx.reply(`QR Code: ${qrResponse.data.qrCode.substring(0, 100)}...`);
-          } else {
-            await ctx.reply('⏳ QR code is being generated. Please wait...');
-          }
-        } catch (err) {
-          console.error('Error getting QR:', err);
-        }
-      }, 2000);
     }
   } catch (err) {
     console.error('Error in text handler:', err);
