@@ -96,11 +96,26 @@ async function initializeWhatsAppSession(userId, telegramId, phoneNumber) {
         if (reason === DisconnectReason.loggedOut) {
           console.log(`User ${userId} logged out`);
           delete whatsappSessions[userId];
+        } else {
+          // For other disconnects (including stream errors), reconnect after delay
+          console.log(`Reconnecting user ${userId} in 5 seconds...`);
+          setTimeout(() => {
+            if (whatsappSessions[userId]) {
+              initializeWhatsAppSession(userId, telegramId, phoneNumber).catch(err => 
+                console.error(`Failed to reconnect user ${userId}:`, err)
+              );
+            }
+          }, 5000);
         }
       }
     });
 
     sock.ev.on('creds.update', saveCreds);
+    
+    // Handle socket errors
+    sock.ev.on('error', (err) => {
+      console.error(`Socket error for user ${userId}:`, err);
+    });
 
     // Store session data immediately
     whatsappSessions[userId] = {
