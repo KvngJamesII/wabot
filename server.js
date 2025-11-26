@@ -40,6 +40,11 @@ async function initializeWhatsAppSession(userId, telegramId, phoneNumber) {
       auth: state,
       logger,
       printQRInTerminal: false,
+      browser: ['WhatsApp', 'Linux', '1.0.0'],
+      pairingCode: true,
+      qrTimeout: 0, // Disable QR code timeout to force pairing code
+      shouldSyncHistoryMessage: () => false,
+      shouldIgnoreJid: () => false,
     });
 
     let pairingCode = null;
