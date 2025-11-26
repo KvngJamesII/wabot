@@ -183,6 +183,29 @@ app.get('/api/status/:userId', async (req, res) => {
   }
 });
 
+// API endpoint to get user status by Telegram ID
+app.get('/api/user-status/:telegramId', async (req, res) => {
+  try {
+    const { telegramId } = req.params;
+    const user = await pool.query('SELECT * FROM users WHERE telegram_id = $1', [telegramId]);
+
+    if (user.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const userInfo = user.rows[0];
+    res.json({
+      telegramId,
+      phoneNumber: userInfo.phone_number,
+      isConnected: userInfo.is_connected,
+      status: userInfo.status,
+      createdAt: userInfo.created_at,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Health check
 app.get('/health', (req, res) => {
   res.json({ status: 'Backend server running', timestamp: new Date() });
