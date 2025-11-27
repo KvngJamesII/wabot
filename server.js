@@ -73,10 +73,15 @@ async function initializeWhatsAppSession(userId, telegramId, phoneNumber) {
           }
           
           // Store in database for persistence
-          await pool.query(
-            'UPDATE users SET pairing_code = $1 WHERE id = $2',
-            [code, userId]
-          );
+          try {
+            await pool.query(
+              'UPDATE users SET pairing_code = $1 WHERE id = $2',
+              [code, userId]
+            );
+          } catch (dbErr) {
+            console.error(`Warning: Could not store pairing code in database: ${dbErr.message}`);
+            // Continue anyway - code is still available in memory
+          }
         } catch (err) {
           console.error(`Error requesting pairing code: ${err.message}`);
         }
