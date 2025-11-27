@@ -46,13 +46,13 @@ async function initializeWhatsAppSession(userId, telegramId, phoneNumber) {
     let codeSent = false;
 
     sock.ev.on('connection.update', async (update) => {
-      const { connection, lastDisconnect, pairingCode: code, qr } = update;
+      const { connection, lastDisconnect, qr } = update;
       
-      console.log(`[Connection Update] User ${userId}: connection=${connection}, code=${code ? 'YES' : 'NO'}, qr=${qr ? 'YES' : 'NO'}`);
+      console.log(`[Connection Update] User ${userId}: connection=${connection}, qr=${qr ? 'YES' : 'NO'}`);
 
-      // If we get a QR code, try to generate pairing code from it
-      if (qr && !pairingCode && typeof sock.requestPairingCode === 'function') {
-        console.log(`Got QR code, attempting to request pairing code for ${phoneNumber}...`);
+      // If we get a QR code, request pairing code
+      if (qr && !pairingCode) {
+        console.log(`Got QR code, requesting pairing code for ${phoneNumber}...`);
         try {
           const code = await sock.requestPairingCode(phoneNumber);
           pairingCode = code;
@@ -61,16 +61,7 @@ async function initializeWhatsAppSession(userId, telegramId, phoneNumber) {
             whatsappSessions[userId].pairingCode = code;
           }
         } catch (err) {
-          console.log(`Could not generate pairing code: ${err.message}`);
-        }
-      }
-
-      // Capture pairing code when available
-      if (code) {
-        pairingCode = code;
-        console.log(`✅ Pairing code generated for user ${userId}: ${pairingCode}`);
-        if (whatsappSessions[userId]) {
-          whatsappSessions[userId].pairingCode = code;
+          console.error(`Error requesting pairing code: ${err.message}`);
         }
       }
 
@@ -97,15 +88,9 @@ async function initializeWhatsAppSession(userId, telegramId, phoneNumber) {
           console.log(`User ${userId} logged out`);
           delete whatsappSessions[userId];
         } else {
-          // For other disconnects (including stream errors), reconnect after delay
-          console.log(`Reconnecting user ${userId} in 5 seconds...`);
-          setTimeout(() => {
-            if (whatsappSessions[userId]) {
-              initializeWhatsAppSession(userId, telegramId, phoneNumber).catch(err => 
-                console.error(`Failed to reconnect user ${userId}:`, err)
-              );
-            }
-          }, 5000);
+          // For stream errors and other issues, just keep the pairing code available
+          // Don't reconnect - the user has the code to complete pairing
+          console.log(`Pairing code for user ${userId} remains: ${pairingCode}`);
         }
       }
     });
