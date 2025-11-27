@@ -181,17 +181,29 @@ app.post('/api/initiate-connection', async (req, res) => {
 app.get('/api/pairing-code/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
+    
+    // First check database for persistence
+    const user = await pool.query('SELECT pairing_code FROM users WHERE id = $1', [userId]);
+    
+    if (user.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const dbCode = user.rows[0].pairing_code;
+    
+    // If code exists in DB, return it
+    if (dbCode) {
+      return res.json({ pairingCode: dbCode, status: 'ready' });
+    }
+
+    // Otherwise check memory (in case it's being generated)
     const session = whatsappSessions[userId];
-
-    if (!session) {
-      return res.status(404).json({ error: 'Session not found' });
+    if (session && session.pairingCode) {
+      return res.json({ pairingCode: session.pairingCode, status: 'ready' });
     }
 
-    if (!session.pairingCode) {
-      return res.json({ pairingCode: null, status: 'generating' });
-    }
-
-    res.json({ pairingCode: session.pairingCode, status: 'ready' });
+    // Code not ready yet
+    res.json({ pairingCode: null, status: 'generating' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
