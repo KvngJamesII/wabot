@@ -28,6 +28,16 @@ app.use(express.json());
 // Initialize WhatsApp session for a user with pairing code
 async function initializeWhatsAppSession(userId, telegramId, phoneNumber) {
   try {
+    // Check if session already exists for this user
+    if (whatsappSessions[userId]) {
+      console.log(`Session already exists for user ${userId}, reusing it`);
+      // Check database for existing pairing code
+      const userRecord = await pool.query('SELECT pairing_code FROM users WHERE id = $1', [userId]);
+      if (userRecord.rows[0]?.pairing_code) {
+        return { sessionId: whatsappSessions[userId].sessionId, pairingCode: userRecord.rows[0].pairing_code };
+      }
+    }
+
     const sessionId = uuidv4();
     const sessionDir = `./sessions/${sessionId}`;
     
@@ -43,7 +53,6 @@ async function initializeWhatsAppSession(userId, telegramId, phoneNumber) {
     });
 
     let pairingCode = null;
-    let codeSent = false;
 
     sock.ev.on('connection.update', async (update) => {
       const { connection, lastDisconnect, qr } = update;
@@ -57,9 +66,17 @@ async function initializeWhatsAppSession(userId, telegramId, phoneNumber) {
           const code = await sock.requestPairingCode(phoneNumber);
           pairingCode = code;
           console.log(`✅ Pairing code generated for user ${userId}: ${pairingCode}`);
+          
+          // Store in memory and database
           if (whatsappSessions[userId]) {
             whatsappSessions[userId].pairingCode = code;
           }
+          
+          // Store in database for persistence
+          await pool.query(
+            'UPDATE users SET pairing_code = $1 WHERE id = $2',
+            [code, userId]
+          );
         } catch (err) {
           console.error(`Error requesting pairing code: ${err.message}`);
         }
@@ -68,13 +85,12 @@ async function initializeWhatsAppSession(userId, telegramId, phoneNumber) {
       if (connection === 'open') {
         console.log(`✅ WhatsApp connected for user ${userId}`);
         
-        // Update database
+        // Clear pairing code and mark as connected
         await pool.query(
-          'UPDATE users SET is_connected = true, whatsapp_session_id = $1, status = $2 WHERE id = $3',
+          'UPDATE users SET is_connected = true, whatsapp_session_id = $1, status = $2, pairing_code = NULL WHERE id = $3',
           [sessionId, 'connected', userId]
         );
 
-        // Update session
         if (whatsappSessions[userId]) {
           whatsappSessions[userId].connected = true;
         }
@@ -87,20 +103,12 @@ async function initializeWhatsAppSession(userId, telegramId, phoneNumber) {
         if (reason === DisconnectReason.loggedOut) {
           console.log(`User ${userId} logged out`);
           delete whatsappSessions[userId];
-        } else {
-          // For stream errors and other issues, just keep the pairing code available
-          // Don't reconnect - the user has the code to complete pairing
-          console.log(`Pairing code for user ${userId} remains: ${pairingCode}`);
         }
+        // Don't reconnect - keep pairing code available for user to use
       }
     });
 
     sock.ev.on('creds.update', saveCreds);
-    
-    // Handle socket errors
-    sock.ev.on('error', (err) => {
-      console.error(`Socket error for user ${userId}:`, err);
-    });
 
     // Store session data immediately
     whatsappSessions[userId] = {
@@ -112,7 +120,6 @@ async function initializeWhatsAppSession(userId, telegramId, phoneNumber) {
 
     console.log(`✅ Session created for user ${userId}. Waiting for pairing code...`);
     
-    // Return immediately with sessionId - pairing code will be captured in the event listener
     return { sessionId, pairingCode: null, message: 'Session initialized. Waiting for pairing code...' };
 
   } catch (err) {
